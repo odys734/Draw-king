@@ -20,6 +20,7 @@ interface UIOverlayProps {
   onPause: () => void;
   onResume: () => void;
   onSelectLevel: (levelId: number) => void;
+  onGenerateAILevel?: () => void;
   totalLevelsCount: number;
   showLevelGrid: boolean;
   setShowLevelGrid: (show: boolean) => void;
@@ -41,6 +42,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({
   onPause,
   onResume,
   onSelectLevel,
+  onGenerateAILevel,
   totalLevelsCount,
   showLevelGrid,
   setShowLevelGrid
@@ -357,7 +359,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({
               animate={{ scale: 1 }}
               exit={{ scale: 0.9 }}
             >
-              <div className="flex items-center justify-between pb-3 border-b border-neutral-200 mb-4">
+              <div className="flex items-center justify-between pb-3 border-b border-neutral-200 mb-3">
                 <div>
                   <h2 className="text-lg font-black text-neutral-900 uppercase tracking-wide">
                     Select Level
@@ -374,6 +376,22 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({
                   Close
                 </button>
               </div>
+
+              {/* Generate AI Physics Level Banner */}
+              {onGenerateAILevel && (
+                <button
+                  onClick={() => {
+                    triggerSelectionHaptic();
+                    onGenerateAILevel();
+                    setShowLevelGrid(false);
+                  }}
+                  className="w-full mb-3.5 py-3 px-4 bg-gradient-to-r from-neutral-900 via-neutral-800 to-neutral-900 hover:from-black hover:to-black text-white font-black rounded-2xl text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg border border-neutral-700 transition-all active:scale-95"
+                  id="generate-ai-level-btn"
+                >
+                  <Sparkles className="w-4 h-4 text-amber-400 animate-pulse" />
+                  <span>Generate AI Physics Level</span>
+                </button>
+              )}
 
               {/* Grid of Levels */}
               <div className="flex-1 overflow-y-auto grid grid-cols-4 sm:grid-cols-5 gap-2.5 p-1 pr-2">

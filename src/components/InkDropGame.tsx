@@ -3,11 +3,15 @@ import { GameStats, GameStateStatus, LevelDefinition, Point, InkStroke } from '.
 import { PhysicsEngine } from '../physics/PhysicsEngine';
 import { HANDCRAFTED_LEVELS } from '../levels/levelData';
 import { ProceduralGenerator } from '../levels/proceduralGenerator';
+import { AILevelGenerator } from '../levels/aiLevelGenerator';
 import { soundManager } from '../audio/SoundSystem';
 import { UIOverlay } from './UIOverlay';
 import { saveManager, ExtendedGameStats } from '../utils/saveManager';
 import { triggerHapticImpact, triggerHapticNotification, setHapticsEnabled } from '../utils/haptics';
 import { initCapacitorAndroid } from '../utils/capacitor';
+
+const LOGICAL_WIDTH = 420;
+const LOGICAL_HEIGHT = 600;
 
 export const InkDropGame: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -22,43 +26,19 @@ export const InkDropGame: React.FC = () => {
   const [gameStatus, setGameStatus] = useState<GameStateStatus>('ready');
   const [defeatReason, setDefeatReason] = useState<string>('');
   const [showHint, setShowHint] = useState<boolean>(false);
+  const [isGeneratingAILevel, setIsGeneratingAILevel] = useState<boolean>(false);
 
   // Synchronize Haptics module setting
   useEffect(() => {
     setHapticsEnabled(stats.hapticsEnabled ?? true);
   }, [stats.hapticsEnabled]);
 
-  // Capacitor Android Initialization & Hardware Back Button
-  useEffect(() => {
-    initCapacitorAndroid({
-      onHardwareBack: () => {
-        if (showLevelGrid) {
-          setShowLevelGrid(false);
-          return true;
-        }
-        if (gameStatus === 'paused') {
-          setGameStatus('playing');
-          return true;
-        }
-        if (gameStatus === 'playing') {
-          setGameStatus('paused');
-          return true;
-        }
-        if (gameStatus === 'won' || gameStatus === 'lost') {
-          initLevel(levelDef);
-          return true;
-        }
-        return false; // Exit app if on main ready screen
-      }
-    });
-  }, [showLevelGrid, gameStatus, levelDef]);
-
   // Ink tracking
   const [inkUsed, setInkUsed] = useState<number>(0);
   const inkStrokesRef = useRef<InkStroke[]>([]);
   const currentPointsRef = useRef<Point[]>([]);
 
-  // Critical Mobile Input Ref Tracking
+  // Critical Mobile Input Ref Tracking (Prevents re-render stroke resets)
   const activePointerIdRef = useRef<number | null>(null);
   const isDrawingRef = useRef<boolean>(false);
   const hasBallDroppedRef = useRef<boolean>(false);
@@ -73,7 +53,7 @@ export const InkDropGame: React.FC = () => {
     levelDefRef.current = levelDef;
   }, [levelDef]);
 
-  // Physics Engine Ref
+  // Physics Engine Persistent Ref
   const physicsEngineRef = useRef<PhysicsEngine | null>(null);
   const animFrameRef = useRef<number | null>(null);
 
@@ -95,14 +75,17 @@ export const InkDropGame: React.FC = () => {
     saveManager.saveStats(newStats);
   }, []);
 
-  // Load level definition
+  // Load level definition (handcrafted or procedural fallback)
   const getLevelDefinition = useCallback((levelId: number): LevelDefinition => {
     if (levelId <= HANDCRAFTED_LEVELS.length) {
       return HANDCRAFTED_LEVELS[levelId - 1];
     }
-    // Procedural level generation for higher levels!
     return ProceduralGenerator.generateLevel(levelId);
   }, []);
+
+  // Callback Refs to prevent physics engine re-initialization on re-renders
+  const handleWinRef = useRef<() => void>(() => {});
+  const handleLoseRef = useRef<(reason: string) => void>(() => {});
 
   // Level Win Callback
   const handleWin = useCallback(() => {
@@ -111,11 +94,12 @@ export const InkDropGame: React.FC = () => {
     setGameStatus('won');
 
     // Calculate stars
-    const remainingRatio = Math.max(0, (levelDef.maxInk - inkUsed) / levelDef.maxInk);
+    const level = levelDefRef.current;
+    const remainingRatio = Math.max(0, (level.maxInk - inkUsedRef.current) / level.maxInk);
     let stars = 1;
-    if (remainingRatio >= levelDef.threeStarInkRatio) {
+    if (remainingRatio >= level.threeStarInkRatio) {
       stars = 3;
-    } else if (remainingRatio >= levelDef.twoStarInkRatio) {
+    } else if (remainingRatio >= level.twoStarInkRatio) {
       stars = 2;
     }
 
@@ -123,8 +107,8 @@ export const InkDropGame: React.FC = () => {
     const particles = particlesRef.current;
     for (let i = 0; i < 60; i++) {
       particles.push({
-        x: levelDef.glass.x,
-        y: levelDef.glass.y,
+        x: level.glass.x,
+        y: level.glass.y,
         vx: (Math.random() - 0.5) * 8,
         vy: -Math.random() * 8 - 2,
         radius: Math.random() * 4 + 2,
@@ -136,24 +120,29 @@ export const InkDropGame: React.FC = () => {
 
     // Update stats
     setStats((prev) => {
-      const prevStars = prev.completedLevels[levelDef.id] || 0;
+      const prevStars = prev.completedLevels[level.id] || 0;
       const newStars = Math.max(prevStars, stars);
-      const updatedLevels = { ...prev.completedLevels, [levelDef.id]: newStars };
+      const updatedLevels = { ...prev.completedLevels, [level.id]: newStars };
 
       const totalStars = Object.values(updatedLevels).reduce((acc: number, curr: number) => acc + curr, 0);
-      const unlockedLevel = Math.max(prev.unlockedLevel, levelDef.id + 1);
+      const unlockedLevel = Math.max(prev.unlockedLevel, level.id + 1);
 
       const nextStats: ExtendedGameStats = {
         ...prev,
         completedLevels: updatedLevels,
         unlockedLevel,
         totalStars,
-        lastPlayedLevel: levelDef.id + 1
+        lastPlayedLevel: level.id + 1
       };
       saveStats(nextStats);
       return nextStats;
     });
-  }, [levelDef, inkUsed, saveStats]);
+  }, [saveStats]);
+
+  // Keep callback refs updated
+  useEffect(() => {
+    handleWinRef.current = handleWin;
+  }, [handleWin]);
 
   // Level Lose Callback
   const handleLose = useCallback((reason: string) => {
@@ -162,11 +151,30 @@ export const InkDropGame: React.FC = () => {
     setGameStatus('lost');
   }, []);
 
+  useEffect(() => {
+    handleLoseRef.current = handleLose;
+  }, [handleLose]);
+
+  // Setup devicePixelRatio hi-DPI Canvas resolution
+  const setupCanvasDpi = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    const targetW = LOGICAL_WIDTH * dpr;
+    const targetH = LOGICAL_HEIGHT * dpr;
+
+    if (canvas.width !== targetW || canvas.height !== targetH) {
+      canvas.width = targetW;
+      canvas.height = targetH;
+    }
+  }, []);
+
   // Initialize Physics Engine & Level
   const initLevel = useCallback((level: LevelDefinition) => {
     setGameStatus('ready');
     setDefeatReason('');
     setInkUsed(0);
+    inkUsedRef.current = 0;
     inkStrokesRef.current = [];
     currentPointsRef.current = [];
     activePointerIdRef.current = null;
@@ -174,19 +182,16 @@ export const InkDropGame: React.FC = () => {
     hasBallDroppedRef.current = false;
     particlesRef.current = [];
 
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    setupCanvasDpi();
 
     if (!physicsEngineRef.current) {
       physicsEngineRef.current = new PhysicsEngine({
-        onWin: handleWin,
-        onLose: handleLose,
+        onWin: () => handleWinRef.current(),
+        onLose: (reason) => handleLoseRef.current(reason),
         onShatter: (x, y) => {
-          // Shatter particles
           for (let i = 0; i < 20; i++) {
             particlesRef.current.push({
-              x,
-              y,
+              x, y,
               vx: (Math.random() - 0.5) * 6,
               vy: (Math.random() - 0.5) * 6,
               radius: Math.random() * 3 + 1,
@@ -197,11 +202,9 @@ export const InkDropGame: React.FC = () => {
           }
         },
         onPortalTeleport: (x, y) => {
-          // Teleport sparkles
           for (let i = 0; i < 15; i++) {
             particlesRef.current.push({
-              x,
-              y,
+              x, y,
               vx: (Math.random() - 0.5) * 4,
               vy: (Math.random() - 0.5) * 4,
               radius: Math.random() * 3 + 1,
@@ -214,15 +217,57 @@ export const InkDropGame: React.FC = () => {
       });
     }
 
-    physicsEngineRef.current.loadLevel(level, canvas.width, canvas.height);
-  }, [handleWin, handleLose]);
+    physicsEngineRef.current.loadLevel(level, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+  }, [setupCanvasDpi]);
 
-  // Load current level
+  // Load current level ONLY when currentLevelId changes
   useEffect(() => {
     const level = getLevelDefinition(currentLevelId);
     setLevelDef(level);
     initLevel(level);
-  }, [currentLevelId, getLevelDefinition, initLevel]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentLevelId]);
+
+  // Automatic AI Level Generator Trigger
+  const handleGenerateAILevel = useCallback(async () => {
+    setIsGeneratingAILevel(true);
+    const nextLevelId = Math.max(HANDCRAFTED_LEVELS.length + 1, currentLevelId + 1);
+    try {
+      const generatedLevel = await AILevelGenerator.generateAILevel(nextLevelId);
+      setLevelDef(generatedLevel);
+      setCurrentLevelId(nextLevelId);
+      initLevel(generatedLevel);
+    } catch (err) {
+      console.error('Failed AI level gen:', err);
+    } finally {
+      setIsGeneratingAILevel(false);
+    }
+  }, [currentLevelId, initLevel]);
+
+  // Capacitor Android Initialization & Hardware Back Button
+  useEffect(() => {
+    initCapacitorAndroid({
+      onHardwareBack: () => {
+        if (showLevelGrid) {
+          setShowLevelGrid(false);
+          return true;
+        }
+        if (gameStatus === 'paused') {
+          setGameStatus('playing');
+          return true;
+        }
+        if (gameStatus === 'playing') {
+          setGameStatus('paused');
+          return true;
+        }
+        if (gameStatus === 'won' || gameStatus === 'lost') {
+          initLevel(levelDef);
+          return true;
+        }
+        return false;
+      }
+    });
+  }, [showLevelGrid, gameStatus, levelDef, initLevel]);
 
   // Toggle Sound
   const handleToggleSound = () => {
@@ -238,7 +283,7 @@ export const InkDropGame: React.FC = () => {
     saveStats({ ...stats, hapticsEnabled: nextVal });
   };
 
-  // Smooth Points using Catmull-Rom or Bezier interpolation
+  // Smooth Points algorithm
   const smoothPoints = (points: Point[]): Point[] => {
     if (points.length < 3) return points;
     const smoothed: Point[] = [];
@@ -258,16 +303,16 @@ export const InkDropGame: React.FC = () => {
     return smoothed;
   };
 
-  // Coordinates helper
+  // Accurate Shared Coordinate Translation (Screen -> Logical 420x600 space)
   const getCanvasCoords = useCallback((clientX: number, clientY: number): Point => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
     const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
+    const scaleX = LOGICAL_WIDTH / rect.width;
+    const scaleY = LOGICAL_HEIGHT / rect.height;
     return {
-      x: Math.max(0, Math.min(canvas.width, (clientX - rect.left) * scaleX)),
-      y: Math.max(0, Math.min(canvas.height, (clientY - rect.top) * scaleY))
+      x: Math.max(0, Math.min(LOGICAL_WIDTH, (clientX - rect.left) * scaleX)),
+      y: Math.max(0, Math.min(LOGICAL_HEIGHT, (clientY - rect.top) * scaleY))
     };
   }, []);
 
@@ -321,7 +366,7 @@ export const InkDropGame: React.FC = () => {
       }
     }
 
-    // The ball drops ONLY once, after the player's first real finger release.
+    // Drop ball ONCE after player finishes their stroke
     if (!hasBallDroppedRef.current) {
       if (physicsEngineRef.current && !physicsEngineRef.current.isReleased()) {
         physicsEngineRef.current.releaseBall();
@@ -333,7 +378,7 @@ export const InkDropGame: React.FC = () => {
     currentPointsRef.current = [];
   }, []);
 
-  // Primary Pointer Event Listeners + Gesture Prevention
+  // Primary Pointer Event Listeners + Mobile Gesture Prevention
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -343,10 +388,9 @@ export const InkDropGame: React.FC = () => {
 
       if (gameStatus === 'won' || gameStatus === 'lost' || gameStatus === 'paused') return;
 
-      // Ignore non-primary buttons on mouse (secondary clicks)
       if (e.button !== undefined && e.button !== 0) return;
 
-      // Maintain a single active pointer. Ignore additional touches (multi-touch / second finger)
+      // Single touch lock
       if (activePointerIdRef.current !== null) return;
 
       activePointerIdRef.current = e.pointerId;
@@ -354,7 +398,7 @@ export const InkDropGame: React.FC = () => {
       try {
         canvas.setPointerCapture(e.pointerId);
       } catch {
-        // pointer capture fallback
+        // fallback
       }
 
       const pt = getCanvasCoords(e.clientX, e.clientY);
@@ -367,7 +411,6 @@ export const InkDropGame: React.FC = () => {
     const handlePointerMove = (e: PointerEvent) => {
       e.preventDefault();
 
-      // Ignore every event that does NOT match the active pointer
       if (activePointerIdRef.current === null || e.pointerId !== activePointerIdRef.current) {
         return;
       }
@@ -388,48 +431,41 @@ export const InkDropGame: React.FC = () => {
 
       if (dist > 3) {
         if (inkUsedRef.current + dist > levelDefRef.current.maxInk) {
-          // Exceeded ink limit: finish drawing stroke
-          finishCurrentDrawing(e.pointerId);
+          // Reached ink limit: stop adding points to stroke without resetting
           return;
         }
 
         pts.push(pt);
-        setInkUsed((prev) => prev + dist);
+        inkUsedRef.current += dist;
+        setInkUsed(inkUsedRef.current);
       }
     };
 
     const handlePointerUp = (e: PointerEvent) => {
       e.preventDefault();
-
       if (activePointerIdRef.current === null || e.pointerId !== activePointerIdRef.current) {
         return;
       }
-
       finishCurrentDrawing(e.pointerId);
     };
 
     const handlePointerCancel = (e: PointerEvent) => {
       e.preventDefault();
-
       if (activePointerIdRef.current === null || e.pointerId !== activePointerIdRef.current) {
         return;
       }
-
       finishCurrentDrawing(e.pointerId);
     };
 
-    // Mobile gesture & scroll prevention listeners
     const preventDefaultHandler = (e: Event) => {
       e.preventDefault();
     };
 
-    // Attach Pointer Events
     canvas.addEventListener('pointerdown', handlePointerDown);
     canvas.addEventListener('pointermove', handlePointerMove);
     canvas.addEventListener('pointerup', handlePointerUp);
     canvas.addEventListener('pointercancel', handlePointerCancel);
 
-    // Suppress browser gestures, scrolling, pull-to-refresh, double-tap zoom & context menu
     canvas.addEventListener('touchstart', preventDefaultHandler, { passive: false });
     canvas.addEventListener('touchmove', preventDefaultHandler, { passive: false });
     canvas.addEventListener('touchend', preventDefaultHandler, { passive: false });
@@ -450,7 +486,7 @@ export const InkDropGame: React.FC = () => {
     };
   }, [gameStatus, getCanvasCoords, finishCurrentDrawing]);
 
-  // Render Loop
+  // Main Canvas Render & Physics Step Loop
   useEffect(() => {
     let lastTime = performance.now();
 
@@ -463,30 +499,36 @@ export const InkDropGame: React.FC = () => {
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
 
-      // Step Physics Engine if playing
+      const dpr = window.devicePixelRatio || 1;
+
+      // Step Physics Engine cleanly in 420x600 logical space
       if (physicsEngineRef.current && gameStatus !== 'paused') {
-        physicsEngineRef.current.update(deltaMs, canvas.width, canvas.height);
+        physicsEngineRef.current.update(deltaMs, LOGICAL_WIDTH, LOGICAL_HEIGHT);
       }
 
+      ctx.save();
+      // Apply devicePixelRatio scale transformation
+      ctx.scale(dpr, dpr);
+
       // --- CLEAR & PAPER BACKGROUND ---
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = '#faf9f6'; // Warm Off-White Paper Canvas
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.clearRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+      ctx.fillStyle = '#faf9f6'; // Warm Paper Canvas
+      ctx.fillRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
 
       // Paper grid pattern
       ctx.strokeStyle = '#e5e5e5';
       ctx.lineWidth = 1;
       const gridSize = 24;
-      for (let x = 0; x < canvas.width; x += gridSize) {
+      for (let x = 0; x < LOGICAL_WIDTH; x += gridSize) {
         ctx.beginPath();
         ctx.moveTo(x, 0);
-        ctx.lineTo(x, canvas.height);
+        ctx.lineTo(x, LOGICAL_HEIGHT);
         ctx.stroke();
       }
-      for (let y = 0; y < canvas.height; y += gridSize) {
+      for (let y = 0; y < LOGICAL_HEIGHT; y += gridSize) {
         ctx.beginPath();
         ctx.moveTo(0, y);
-        ctx.lineTo(canvas.width, y);
+        ctx.lineTo(LOGICAL_WIDTH, y);
         ctx.stroke();
       }
 
@@ -526,7 +568,6 @@ export const InkDropGame: React.FC = () => {
             ctx.fillStyle = '#dc2626';
             ctx.fillRect(-w / 2, -h / 2, w, h);
 
-            // Spike danger teeth
             ctx.fillStyle = '#171717';
             const toothCount = Math.floor(w / 12);
             const toothWidth = w / toothCount;
@@ -540,7 +581,6 @@ export const InkDropGame: React.FC = () => {
             break;
           }
           case 'rotator': {
-            // Find current rotator body angle from physics engine
             const obsRef = physicsEngineRef.current?.world.bodies.find(b => b.label === 'rotator');
             const angle = obsRef ? obsRef.angle : 0;
 
@@ -548,7 +588,6 @@ export const InkDropGame: React.FC = () => {
             ctx.fillStyle = '#171717';
             ctx.fillRect(-(obs.width || 120) / 2, -(obs.height || 16) / 2, obs.width || 120, obs.height || 16);
 
-            // Pivot wheel
             ctx.fillStyle = '#737373';
             ctx.beginPath();
             ctx.arc(0, 0, 10, 0, Math.PI * 2);
@@ -566,7 +605,6 @@ export const InkDropGame: React.FC = () => {
             ctx.setLineDash([4, 4]);
             ctx.strokeRect(-(obs.width || 60) / 2, -(obs.height || 60) / 2, obs.width || 60, obs.height || 60);
 
-            // Animated wind particles
             ctx.fillStyle = 'rgba(59, 130, 246, 0.4)';
             const t = performance.now() * 0.003;
             for (let i = 0; i < 4; i++) {
@@ -616,7 +654,7 @@ export const InkDropGame: React.FC = () => {
         ctx.restore();
       });
 
-      // --- DRAW GLASS ---
+      // --- DRAW GLASS CUP ---
       const g = levelDef.glass;
       ctx.save();
       ctx.translate(g.x, g.y);
@@ -626,7 +664,6 @@ export const InkDropGame: React.FC = () => {
       const gh = g.height;
       const wt = 10;
 
-      // Glass Body Gradient Fill
       const glassGrad = ctx.createLinearGradient(-gw / 2, 0, gw / 2, 0);
       glassGrad.addColorStop(0, 'rgba(255, 255, 255, 0.6)');
       glassGrad.addColorStop(0.5, 'rgba(255, 255, 255, 0.2)');
@@ -635,13 +672,11 @@ export const InkDropGame: React.FC = () => {
       ctx.fillStyle = glassGrad;
       ctx.fillRect(-gw / 2, -gh / 2, gw, gh);
 
-      // Glass Thick Black Outline
       ctx.fillStyle = '#171717';
-      ctx.fillRect(-gw / 2, -gh / 2, wt, gh); // Left wall
-      ctx.fillRect(gw / 2 - wt, -gh / 2, wt, gh); // Right wall
-      ctx.fillRect(-gw / 2, gh / 2 - wt, gw, wt); // Bottom wall
+      ctx.fillRect(-gw / 2, -gh / 2, wt, gh);
+      ctx.fillRect(gw / 2 - wt, -gh / 2, wt, gh);
+      ctx.fillRect(-gw / 2, gh / 2 - wt, gw, wt);
 
-      // Glass Shine Line
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
       ctx.lineWidth = 3;
       ctx.beginPath();
@@ -688,13 +723,11 @@ export const InkDropGame: React.FC = () => {
         ctx.save();
         ctx.translate(bx, by);
 
-        // Black Ball
         ctx.fillStyle = '#171717';
         ctx.beginPath();
         ctx.arc(0, 0, br, 0, Math.PI * 2);
         ctx.fill();
 
-        // Ball shine curve
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
         ctx.lineWidth = 2;
         ctx.beginPath();
@@ -727,6 +760,8 @@ export const InkDropGame: React.FC = () => {
         ctx.restore();
       }
 
+      ctx.restore(); // Restore dpr scale matrix
+
       animFrameRef.current = requestAnimationFrame(loop);
     };
 
@@ -742,17 +777,26 @@ export const InkDropGame: React.FC = () => {
   return (
     <div
       ref={containerRef}
-      className="relative w-full h-full flex items-center justify-center bg-neutral-100 overflow-hidden"
+      className="relative w-screen h-screen flex flex-col items-center justify-center bg-neutral-900 overflow-hidden select-none touch-none"
     >
-      {/* Game Canvas Container */}
-      <div className="relative w-full max-w-[420px] aspect-[420/600] max-h-full bg-white shadow-2xl rounded-3xl overflow-hidden border border-neutral-300">
+      {/* Game Canvas Container - Clean full screen layout, zero offset */}
+      <div className="relative flex-1 w-full max-w-[420px] aspect-[420/600] max-h-full bg-white shadow-2xl rounded-3xl overflow-hidden border border-neutral-800 my-auto">
         <canvas
           ref={canvasRef}
-          width={420}
-          height={600}
-          className="w-full h-full touch-none select-none cursor-crosshair"
+          width={LOGICAL_WIDTH}
+          height={LOGICAL_HEIGHT}
+          className="w-full h-full touch-none select-none cursor-crosshair object-contain"
           id="game-canvas"
         />
+
+        {/* AI Level Generation Loader Overlay */}
+        {isGeneratingAILevel && (
+          <div className="absolute inset-0 z-40 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center text-white space-y-3">
+            <div className="w-10 h-10 border-4 border-amber-400 border-t-transparent rounded-full animate-spin" />
+            <div className="font-black text-sm uppercase tracking-wider">Designing AI Physics Level...</div>
+            <div className="text-xs text-neutral-300">Validating puzzle solvability & physics rules</div>
+          </div>
+        )}
 
         {/* UI Overlay */}
         <UIOverlay
@@ -771,6 +815,7 @@ export const InkDropGame: React.FC = () => {
           onPause={() => setGameStatus('paused')}
           onResume={() => setGameStatus('playing')}
           onSelectLevel={(id) => setCurrentLevelId(id)}
+          onGenerateAILevel={handleGenerateAILevel}
           totalLevelsCount={HANDCRAFTED_LEVELS.length}
           showLevelGrid={showLevelGrid}
           setShowLevelGrid={setShowLevelGrid}

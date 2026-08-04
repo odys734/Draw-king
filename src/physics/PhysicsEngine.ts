@@ -50,6 +50,10 @@ export class PhysicsEngine {
     this.setupCollisionEvents();
   }
 
+  public updateCallbacks(callbacks: PhysicsEngineCallbacks) {
+    this.callbacks = callbacks;
+  }
+
   private setupCollisionEvents() {
     Matter.Events.on(this.engine, 'collisionStart', (event) => {
       event.pairs.forEach((pair) => {

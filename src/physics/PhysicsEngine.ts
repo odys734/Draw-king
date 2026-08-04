@@ -317,8 +317,9 @@ export class PhysicsEngine {
   }
 
   public update(deltaMs: number, canvasWidth: number, canvasHeight: number) {
-    // 1. Step Matter.js Physics Engine
-    Matter.Engine.update(this.engine, deltaMs);
+    // 1. Step Matter.js Physics Engine with clamped delta to avoid tunneling/lag spikes on Android
+    const safeDelta = Math.min(Math.max(deltaMs, 8), 33.33);
+    Matter.Engine.update(this.engine, safeDelta);
 
     // 2. Update dynamic obstacles (Rotators, Moving Platforms, Special Zones)
     this.updateObstacles(deltaMs);

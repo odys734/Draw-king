@@ -1,0 +1,16 @@
+{
+  "appId": "com.inkdrop.physicsgame",
+  "appName": "Ink Drop",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "StatusBar": {
+      "overlaysWebView": true,
+      "style": "DARK",
+      "backgroundColor": "#171717"
+    }
+  }
+}

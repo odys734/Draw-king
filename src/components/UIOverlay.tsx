@@ -1,17 +1,19 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Play, RotateCcw, Volume2, VolumeX, Lightbulb, Grid, Pause, Sparkles, CheckCircle2, AlertTriangle, ArrowRight } from 'lucide-react';
+import { Play, RotateCcw, Volume2, VolumeX, Lightbulb, Grid, Pause, Sparkles, AlertTriangle, ArrowRight, Smartphone } from 'lucide-react';
 import { GameStats, GameStateStatus, LevelDefinition } from '../types';
+import { triggerSelectionHaptic, triggerHapticImpact } from '../utils/haptics';
 
 interface UIOverlayProps {
   currentLevel: LevelDefinition;
-  stats: GameStats;
+  stats: GameStats & { hapticsEnabled?: boolean };
   gameStatus: GameStateStatus;
   inkRemaining: number; // 0 to maxInk
   maxInk: number;
   showHint: boolean;
   defeatReason: string;
   onToggleSound: () => void;
+  onToggleHaptics: () => void;
   onToggleHint: () => void;
   onRestart: () => void;
   onNextLevel: () => void;
@@ -19,6 +21,8 @@ interface UIOverlayProps {
   onResume: () => void;
   onSelectLevel: (levelId: number) => void;
   totalLevelsCount: number;
+  showLevelGrid: boolean;
+  setShowLevelGrid: (show: boolean) => void;
 }
 
 export const UIOverlay: React.FC<UIOverlayProps> = ({
@@ -30,18 +34,24 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({
   showHint,
   defeatReason,
   onToggleSound,
+  onToggleHaptics,
   onToggleHint,
   onRestart,
   onNextLevel,
   onPause,
   onResume,
   onSelectLevel,
-  totalLevelsCount
+  totalLevelsCount,
+  showLevelGrid,
+  setShowLevelGrid
 }) => {
-  const [showLevelGrid, setShowLevelGrid] = React.useState(false);
-
   const inkRatio = Math.max(0, Math.min(1, inkRemaining / maxInk));
   const inkPercent = Math.round(inkRatio * 100);
+
+  const handleBtnClick = (action: () => void) => {
+    triggerSelectionHaptic();
+    action();
+  };
 
   // Calculate potential stars earned based on remaining ink
   let currentStars = 1;
@@ -52,7 +62,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({
   }
 
   return (
-    <div className="absolute inset-0 pointer-events-none flex flex-col justify-between p-4 font-sans select-none">
+    <div className="absolute inset-0 pointer-events-none flex flex-col justify-between p-4 font-sans select-none safe-area-pt safe-area-pb">
       {/* --- TOP BAR --- */}
       <div className="pointer-events-auto flex items-center justify-between bg-white/90 backdrop-blur-md border border-neutral-300 rounded-2xl p-3 shadow-md">
         {/* Level badge */}
@@ -66,7 +76,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({
         </div>
 
         {/* Ink Meter Bar */}
-        <div className="flex-1 max-w-[180px] sm:max-w-[240px] mx-3">
+        <div className="flex-1 max-w-[150px] sm:max-w-[220px] mx-2 sm:mx-3">
           <div className="flex items-center justify-between text-xs font-bold text-neutral-700 mb-1">
             <span>INK</span>
             <span>{inkPercent}%</span>
@@ -93,9 +103,9 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({
         </div>
 
         {/* Action Controls */}
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1">
           <button
-            onClick={onToggleHint}
+            onClick={() => handleBtnClick(onToggleHint)}
             className={`p-2 rounded-xl border transition-all ${
               showHint
                 ? 'bg-amber-100 border-amber-400 text-amber-700 shadow-inner scale-95'
@@ -108,7 +118,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({
           </button>
 
           <button
-            onClick={onToggleSound}
+            onClick={() => handleBtnClick(onToggleSound)}
             className="p-2 rounded-xl bg-neutral-100 hover:bg-neutral-200 border border-neutral-300 text-neutral-700 transition-all"
             title="Toggle Sound"
             id="sound-btn"
@@ -117,7 +127,20 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({
           </button>
 
           <button
-            onClick={onPause}
+            onClick={() => handleBtnClick(onToggleHaptics)}
+            className={`p-2 rounded-xl border transition-all ${
+              stats.hapticsEnabled ?? true
+                ? 'bg-neutral-100 hover:bg-neutral-200 border-neutral-300 text-neutral-700'
+                : 'bg-neutral-200 border-neutral-300 text-neutral-400'
+            }`}
+            title="Toggle Haptics"
+            id="haptics-btn"
+          >
+            <Smartphone className={`w-4 h-4 ${stats.hapticsEnabled ?? true ? 'text-neutral-800' : 'text-neutral-400'}`} />
+          </button>
+
+          <button
+            onClick={() => handleBtnClick(onPause)}
             className="p-2 rounded-xl bg-neutral-100 hover:bg-neutral-200 border border-neutral-300 text-neutral-700 transition-all"
             title="Pause Game"
             id="pause-btn"
@@ -130,7 +153,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({
       {/* --- BOTTOM BAR --- */}
       <div className="pointer-events-auto flex items-center justify-between">
         <button
-          onClick={() => setShowLevelGrid(true)}
+          onClick={() => handleBtnClick(() => setShowLevelGrid(true))}
           className="flex items-center gap-2 bg-white/90 hover:bg-white text-neutral-800 font-semibold text-xs uppercase tracking-wider px-3.5 py-2.5 rounded-xl border border-neutral-300 shadow-md backdrop-blur-md transition-all active:scale-95"
           id="level-select-btn"
         >
@@ -146,7 +169,7 @@ export const UIOverlay: React.FC<UIOverlayProps> = ({
         </div>
 
         <button
-          onClick={onRestart}
+          onClick={() => handleBtnClick(onRestart)}
           className="flex items-center gap-2 bg-neutral-900 hover:bg-neutral-800 text-white font-semibold text-xs uppercase tracking-wider px-4 py-2.5 rounded-xl shadow-lg transition-all active:scale-95"
           id="restart-btn"
         >

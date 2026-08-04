@@ -5,36 +5,53 @@ import { HANDCRAFTED_LEVELS } from '../levels/levelData';
 import { ProceduralGenerator } from '../levels/proceduralGenerator';
 import { soundManager } from '../audio/SoundSystem';
 import { UIOverlay } from './UIOverlay';
-
-const STORAGE_KEY = 'ink_drop_stats_v1';
+import { saveManager, ExtendedGameStats } from '../utils/saveManager';
+import { triggerHapticImpact, triggerHapticNotification, setHapticsEnabled } from '../utils/haptics';
+import { initCapacitorAndroid } from '../utils/capacitor';
 
 export const InkDropGame: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  // Game Stats State
-  const [stats, setStats] = useState<GameStats>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        return JSON.parse(saved);
-      }
-    } catch {
-      // fallback
-    }
-    return {
-      completedLevels: {},
-      unlockedLevel: 1,
-      totalStars: 0,
-      soundEnabled: true
-    };
-  });
+  // Game Stats State with SaveManager
+  const [stats, setStats] = useState<ExtendedGameStats>(() => saveManager.loadStats());
+  const [showLevelGrid, setShowLevelGrid] = useState<boolean>(false);
 
-  const [currentLevelId, setCurrentLevelId] = useState<number>(1);
+  const [currentLevelId, setCurrentLevelId] = useState<number>(() => stats.lastPlayedLevel || 1);
   const [levelDef, setLevelDef] = useState<LevelDefinition>(HANDCRAFTED_LEVELS[0]);
   const [gameStatus, setGameStatus] = useState<GameStateStatus>('ready');
   const [defeatReason, setDefeatReason] = useState<string>('');
   const [showHint, setShowHint] = useState<boolean>(false);
+
+  // Synchronize Haptics module setting
+  useEffect(() => {
+    setHapticsEnabled(stats.hapticsEnabled ?? true);
+  }, [stats.hapticsEnabled]);
+
+  // Capacitor Android Initialization & Hardware Back Button
+  useEffect(() => {
+    initCapacitorAndroid({
+      onHardwareBack: () => {
+        if (showLevelGrid) {
+          setShowLevelGrid(false);
+          return true;
+        }
+        if (gameStatus === 'paused') {
+          setGameStatus('playing');
+          return true;
+        }
+        if (gameStatus === 'playing') {
+          setGameStatus('paused');
+          return true;
+        }
+        if (gameStatus === 'won' || gameStatus === 'lost') {
+          initLevel(levelDef);
+          return true;
+        }
+        return false; // Exit app if on main ready screen
+      }
+    });
+  }, [showLevelGrid, gameStatus, levelDef]);
 
   // Ink tracking
   const [inkUsed, setInkUsed] = useState<number>(0);
@@ -72,14 +89,10 @@ export const InkDropGame: React.FC = () => {
     maxLife: number;
   }>>([]);
 
-  // Save Stats to LocalStorage
-  const saveStats = useCallback((newStats: GameStats) => {
+  // Save Stats to LocalStorage using saveManager
+  const saveStats = useCallback((newStats: ExtendedGameStats) => {
     setStats(newStats);
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(newStats));
-    } catch {
-      // ignore
-    }
+    saveManager.saveStats(newStats);
   }, []);
 
   // Load level definition
@@ -94,6 +107,7 @@ export const InkDropGame: React.FC = () => {
   // Level Win Callback
   const handleWin = useCallback(() => {
     soundManager.playWinSound();
+    triggerHapticNotification('success');
     setGameStatus('won');
 
     // Calculate stars
@@ -129,11 +143,12 @@ export const InkDropGame: React.FC = () => {
       const totalStars = Object.values(updatedLevels).reduce((acc: number, curr: number) => acc + curr, 0);
       const unlockedLevel = Math.max(prev.unlockedLevel, levelDef.id + 1);
 
-      const nextStats = {
+      const nextStats: ExtendedGameStats = {
         ...prev,
         completedLevels: updatedLevels,
         unlockedLevel,
-        totalStars
+        totalStars,
+        lastPlayedLevel: levelDef.id + 1
       };
       saveStats(nextStats);
       return nextStats;
@@ -143,6 +158,7 @@ export const InkDropGame: React.FC = () => {
   // Level Lose Callback
   const handleLose = useCallback((reason: string) => {
     setDefeatReason(reason);
+    triggerHapticNotification('error');
     setGameStatus('lost');
   }, []);
 
@@ -213,6 +229,13 @@ export const InkDropGame: React.FC = () => {
     const nextVal = !stats.soundEnabled;
     soundManager.setEnabled(nextVal);
     saveStats({ ...stats, soundEnabled: nextVal });
+  };
+
+  // Toggle Haptics
+  const handleToggleHaptics = () => {
+    const nextVal = !(stats.hapticsEnabled ?? true);
+    setHapticsEnabled(nextVal);
+    saveStats({ ...stats, hapticsEnabled: nextVal });
   };
 
   // Smooth Points using Catmull-Rom or Bezier interpolation
@@ -303,6 +326,7 @@ export const InkDropGame: React.FC = () => {
       if (physicsEngineRef.current && !physicsEngineRef.current.isReleased()) {
         physicsEngineRef.current.releaseBall();
         hasBallDroppedRef.current = true;
+        triggerHapticImpact('medium');
       }
     }
 
@@ -337,6 +361,7 @@ export const InkDropGame: React.FC = () => {
       isDrawingRef.current = true;
       currentPointsRef.current = [pt];
       soundManager.startDrawingSound();
+      triggerHapticImpact('light');
     };
 
     const handlePointerMove = (e: PointerEvent) => {
@@ -739,6 +764,7 @@ export const InkDropGame: React.FC = () => {
           showHint={showHint}
           defeatReason={defeatReason}
           onToggleSound={handleToggleSound}
+          onToggleHaptics={handleToggleHaptics}
           onToggleHint={() => setShowHint((prev) => !prev)}
           onRestart={() => initLevel(levelDef)}
           onNextLevel={() => setCurrentLevelId((prev) => prev + 1)}
@@ -746,6 +772,8 @@ export const InkDropGame: React.FC = () => {
           onResume={() => setGameStatus('playing')}
           onSelectLevel={(id) => setCurrentLevelId(id)}
           totalLevelsCount={HANDCRAFTED_LEVELS.length}
+          showLevelGrid={showLevelGrid}
+          setShowLevelGrid={setShowLevelGrid}
         />
       </div>
     </div>

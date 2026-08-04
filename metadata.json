@@ -1,0 +1,6 @@
+{
+  "name": "Ink Drop",
+  "description": "Minimalist black-and-white physics puzzle game inspired by Happy Glass and Brain It On.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

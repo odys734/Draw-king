@@ -288,7 +288,7 @@ export class PhysicsEngine {
   public addInkStrokeBodies(points: Point[], strokeThickness: number = 7) {
     if (points.length < 2) return;
 
-    const strokeGroup = Matter.Body.nextGroup(true);
+    const bodies: Matter.Body[] = [];
 
     for (let i = 0; i < points.length - 1; i++) {
       const p1 = points[i];
@@ -311,12 +311,28 @@ export class PhysicsEngine {
         restitution: 0.1,
         angle: angle,
         chamfer: { radius: strokeThickness / 2 },
-        collisionFilter: { group: strokeGroup, category: this.CATEGORY_INK },
+        collisionFilter: {
+          category: this.CATEGORY_INK,
+          mask: this.CATEGORY_BALL
+        },
         label: 'inkSegment'
       });
 
-      Matter.World.add(this.world, segment);
-      this.inkBodies.push(segment);
+      bodies.push(segment);
+    }
+
+    if (bodies.length > 0) {
+      Matter.World.add(this.world, bodies);
+      this.inkBodies.push(...bodies);
+    }
+
+    // Verify Physics state
+    if (this.ball) {
+      console.log('=== Physics Verification After Ink Commit ===');
+      console.log('Ball position:', this.ball.position);
+      console.log('Ball velocity:', this.ball.velocity);
+      console.log('Ball angle:', this.ball.angle);
+      console.log('World body count:', Matter.Composite.allBodies(this.world).length);
     }
   }
 
